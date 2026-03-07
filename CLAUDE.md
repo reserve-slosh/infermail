@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Install / sync deps
 uv sync
-uv sync --extra train   # include scikit-learn etc.
+uv sync --extra dev --extra train   # full local dev (tests + ML libs)
 
 # Run CLI
 uv run infermail fetch              # fetch all accounts
@@ -16,6 +16,11 @@ uv run infermail fetch --dry-run    # no DB writes
 uv run infermail daemon             # continuous fetch loop (Docker)
 uv run infermail status             # account sync stats
 uv run infermail label              # interactive TUI labeler
+uv run infermail classify           # run rules + ML on unprocessed emails
+uv run infermail classify -a gmail  # single account, up to -n 500 emails
+uv run infermail sync               # move emails in IMAP to match DB classifications
+uv run infermail sync --dry-run     # preview moves without touching IMAP
+uv run infermail backup             # dump all emails + classifications to JSONL
 uv run infermail migrate            # alembic upgrade head
 
 # Migrations
@@ -51,6 +56,10 @@ uv run mypy infermail
 | `infermail/fetch/imap.py` | Core IMAP logic — connect, search UIDs, fetch RFC822, parse, upsert. |
 | `infermail/fetch/runner.py` | Orchestrates across all configured accounts. |
 | `infermail/classify/labeler.py` | Full-screen TUI labeler using `rich` + `readchar`. |
+| `infermail/classify/predictor.py` | `Predictor` (joblib sklearn pipeline) + `run_classify()` — applies rules then ML to unprocessed emails. |
+| `infermail/db/helpers.py` | Shared DB utilities — `get_or_create_label()`. |
+| `infermail/sync/__init__.py` | `run_sync()` — moves emails in IMAP to match DB classifications; called by daemon after classify. |
+| `infermail/backup/__init__.py` | `run_backup()` — streams all emails + classifications to a timestamped JSONL file. |
 | `infermail/cli.py` | Click CLI entry point (`infermail.cli:main`). |
 | `migrations/` | Alembic; `env.py` pulls `DATABASE_URL` from `settings`. |
 | `config/accounts.yml` | IMAP account definitions (non-secret). |
