@@ -1,0 +1,36 @@
+accounts:
+  - name: gmail
+    email_address: flemming.reese@gmail.com
+    imap_host: imap.gmail.com
+    imap_port: 993
+    provider: gmail
+    password_env: ACCOUNT_GMAIL_PASSWORD
+    folders:
+      - INBOX
+      - "[Gmail]/Spam"
+      - Arbeit
+      - Privat
+      - Belege
+
+  - name: strato
+    email_address: kontakt@reese-data.de
+    imap_host: imap.strato.de
+    imap_port: 993
+    provider: strato
+    password_env: ACCOUNT_STRATO_PASSWORD
+    folders:
+      - INBOX
+      - Spam
+
+  - name: gmx
+    email_address: flemming.reese@gmx.de
+    imap_host: imap.gmx.net
+    imap_port: 993
+    provider: gmx
+    password_env: ACCOUNT_GMX_PASSWORD
+    folders:
+      - INBOX
+      - Spamverdacht
+      - Junk-E-Mail
+      - Archiv
+      - Gesendet
