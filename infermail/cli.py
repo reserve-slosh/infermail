@@ -40,6 +40,7 @@ def daemon() -> None:
 
     from infermail.classify.predictor import Predictor, run_classify
     from infermail.fetch.runner import run_fetch
+    from infermail.sync import run_sync
 
     predictor = Predictor(settings.model_path)
     logger.info(f"Daemon started — interval: {settings.fetch_interval_seconds}s")
@@ -48,6 +49,7 @@ def daemon() -> None:
             with SessionLocal() as session:
                 run_fetch(session)
                 run_classify(session, predictor)
+                run_sync(session)
         except Exception as e:
             logger.error(f"Fetch/classify cycle failed: {e}")
         time.sleep(settings.fetch_interval_seconds)
@@ -90,6 +92,32 @@ def label(account: str | None, batch: int) -> None:
     """Interaktives Labeling-Tool für Training-Daten."""
     from infermail.classify.labeler import run_labeler
     run_labeler(account_name=account, batch=batch)
+
+
+@main.command()
+@click.option("--account", "-a", default=None, help="Sync single account only.")
+@click.option("--dry-run", is_flag=True, help="Preview moves without touching IMAP.")
+def sync(account: str | None, dry_run: bool) -> None:
+    """Move emails in IMAP to match DB classifications."""
+    from infermail.sync import run_sync
+
+    with SessionLocal() as session:
+        counts = run_sync(session, account_name=account, dry_run=dry_run)
+    click.echo(f"moved: {counts['moved']}  skipped: {counts['skipped']}  errors: {counts['errors']}")
+
+
+@main.command()
+@click.option("--dir", "backup_dir", default="backups", show_default=True, help="Directory to write the backup file.")
+def backup(backup_dir: str) -> None:
+    """Dump all emails and classifications to a JSONL file."""
+    from pathlib import Path
+
+    from infermail.backup import run_backup
+
+    target = Path(backup_dir)
+    with SessionLocal() as session:
+        out = run_backup(session, target)
+    click.echo(f"Backup written to {out}")
 
 
 @main.command()
