@@ -11,6 +11,11 @@ accounts:
       - Arbeit
       - Privat
       - Belege
+    label_folders:
+      inbox: INBOX
+      wichtig: INBOX
+      spam: "[Gmail]/Spam"
+      newsletter: Newsletter
 
   - name: strato
     email_address: kontakt@reese-data.de
@@ -21,6 +26,11 @@ accounts:
     folders:
       - INBOX
       - Spam
+    label_folders:
+      inbox: INBOX
+      wichtig: INBOX
+      spam: Spam
+      newsletter: Newsletter
 
   - name: gmx
     email_address: flemming.reese@gmx.de
@@ -34,3 +44,8 @@ accounts:
       - Junk-E-Mail
       - Archiv
       - Gesendet
+    label_folders:
+      inbox: INBOX
+      wichtig: INBOX
+      spam: Spamverdacht
+      newsletter: Newsletter
