@@ -13,6 +13,7 @@ from rich.text import Text
 from sqlalchemy import func, exists
 from sqlalchemy.orm import Session
 
+from infermail.db.helpers import get_or_create_label
 from infermail.db.models import Email, EmailClassification, Label, ClassificationMethod, Rule
 from infermail.db.session import SessionLocal
 
@@ -39,19 +40,6 @@ LABEL_COLORS = {
     "wichtig": "yellow",
 }
 
-
-def _get_or_create_label(session: Session, name: str) -> Label:
-    label = session.query(Label).filter_by(name=name).first()
-    if not label:
-        label = Label(name=name, is_system=True, color=_label_color(name))
-        session.add(label)
-        session.commit()
-    return label
-
-
-def _label_color(name: str) -> str:
-    colors = {"inbox": "#22c55e", "spam": "#ef4444", "newsletter": "#3b82f6", "wichtig": "#eab308"}
-    return colors.get(name, "#94a3b8")
 
 
 def _extract_domain(sender: str | None) -> str | None:
@@ -105,7 +93,7 @@ def _count_labeled(session: Session) -> dict[str, int]:
 
 
 def _apply_label(session: Session, email: Email, label_name: str) -> None:
-    label = _get_or_create_label(session, label_name)
+    label = get_or_create_label(session, label_name)
     existing = (
         session.query(EmailClassification)
         .filter_by(email_id=email.id, method=ClassificationMethod.manual)
@@ -134,7 +122,7 @@ def _remove_label(session: Session, email: Email) -> None:
 
 def _bulk_spam_domain(session: Session, domain: str) -> int:
     """Label all unlabeled emails from domain as spam. Returns count."""
-    label = _get_or_create_label(session, "spam")
+    label = get_or_create_label(session, "spam")
     matching = (
         session.query(Email)
         .filter(
@@ -335,7 +323,7 @@ def _handle_regex_rule(session: Session) -> int:
         console.print("\n[dim]Abgebrochen.[/dim]")
         return 0
 
-    label = _get_or_create_label(session, "spam")
+    label = get_or_create_label(session, "spam")
     for email in matching:
         session.add(EmailClassification(
             email_id=email.id,
