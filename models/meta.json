@@ -1,0 +1,18 @@
+{
+  "model_version": "20260307T153412Z",
+  "model_name": "linearsvc",
+  "trained_at": "2026-03-07T15:34:13.174487+00:00",
+  "n_samples": 3955,
+  "label_counts": {
+    "spam": 1968,
+    "inbox": 1845,
+    "newsletter": 142
+  },
+  "metrics": {
+    "f1_macro": 0.9378,
+    "f1_not_inbox": 0.9419,
+    "f1_inbox": 0.9337,
+    "precision_inbox": 0.9324,
+    "recall_inbox": 0.935
+  }
+}
