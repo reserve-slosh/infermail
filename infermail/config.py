@@ -17,9 +17,9 @@ class Settings(BaseSettings):
     fetch_interval_seconds: int = 300
     log_level: str = "INFO"
 
-    # Paths
-    backup_dir: Path = Path("/app/backup")
-    model_path: Path = Path("/app/models/classifier.joblib")
+    # Paths (override in .env for local dev; Docker sets /app/... via env)
+    backup_dir: Path = Path("backups")
+    model_path: Path = Path("models/classifier.joblib")
 
     # Account credentials
     account_gmail_password: str = ""
