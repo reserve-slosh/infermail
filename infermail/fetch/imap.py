@@ -10,14 +10,15 @@ from typing import Any
 
 from imapclient import IMAPClient
 from loguru import logger
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 from tenacity import retry, stop_after_attempt, wait_exponential
+from tqdm import tqdm
 
-from infermail.db.models import Account, Email
+from infermail.db.models import Email, Account
 
 
 def _decode_str(value: str | bytes | None) -> str:
-    """Decode encoded email header value to plain string."""
     if value is None:
         return ""
     if isinstance(value, bytes):
@@ -27,36 +28,41 @@ def _decode_str(value: str | bytes | None) -> str:
     result = []
     for part, charset in parts:
         if isinstance(part, bytes):
-            result.append(part.decode(charset or "utf-8", errors="replace"))
+            try:
+                result.append(part.decode(charset or "utf-8", errors="replace"))
+            except (LookupError, TypeError):
+                result.append(part.decode("latin-1", errors="replace"))
         else:
             result.append(part)
     return "".join(result)
 
 
+def _decode_payload(part: email_lib.message.Message) -> str:
+    raw = part.get_payload(decode=True)
+    if not raw:
+        return ""
+    charset = part.get_content_charset() or "utf-8"
+    try:
+        return raw.decode(charset, errors="replace")
+    except (LookupError, TypeError):
+        return raw.decode("latin-1", errors="replace")
+
+
 def _parse_body(msg: email_lib.message.Message) -> tuple[str, str]:
-    """Extract (text, html) body from a Message object."""
     text, html = "", ""
     if msg.is_multipart():
         for part in msg.walk():
             ct = part.get_content_type()
             if ct == "text/plain" and not text:
-                text = part.get_payload(decode=True).decode(
-                    part.get_content_charset() or "utf-8", errors="replace"
-                )
+                text = _decode_payload(part)
             elif ct == "text/html" and not html:
-                html = part.get_payload(decode=True).decode(
-                    part.get_content_charset() or "utf-8", errors="replace"
-                )
+                html = _decode_payload(part)
     else:
-        payload = msg.get_payload(decode=True)
-        if payload:
-            decoded = payload.decode(
-                msg.get_content_charset() or "utf-8", errors="replace"
-            )
-            if msg.get_content_type() == "text/html":
-                html = decoded
-            else:
-                text = decoded
+        decoded = _decode_payload(msg)
+        if msg.get_content_type() == "text/html":
+            html = decoded
+        else:
+            text = decoded
     return text, html
 
 
@@ -76,9 +82,7 @@ def _build_email_obj(
     folder: str,
     account: Account,
 ) -> dict[str, Any]:
-    """Parse raw RFC822 bytes into a dict ready for Email model."""
     msg = email_lib.message_from_bytes(raw)
-
     message_id = msg.get("Message-ID", "").strip()
     subject = _decode_str(msg.get("Subject"))
     sender_raw = msg.get("From", "")
@@ -86,13 +90,11 @@ def _build_email_obj(
     reply_to = msg.get("Reply-To")
     recipients_raw = msg.get("To", "")
     list_unsubscribe = msg.get("List-Unsubscribe")
-
-    headers: dict[str, str] = dict(msg.items())
+    headers: dict[str, str] = {k: str(v) for k, v in msg.items()}
     body_text, body_html = _parse_body(msg)
     has_attachments = any(
         part.get_content_disposition() == "attachment" for part in msg.walk()
     )
-
     return {
         "message_id": message_id,
         "account_id": account.id,
@@ -126,10 +128,6 @@ def fetch_account(
     folders: list[str],
     batch_size: int = 100,
 ) -> int:
-    """
-    Fetch unseen/new emails for one account and persist to DB.
-    Returns number of new emails inserted.
-    """
     inserted = 0
 
     try:
@@ -146,12 +144,11 @@ def fetch_account(
                 logger.warning(f"[{account.name}] Cannot select folder '{folder}': {e}")
                 continue
 
-            # Fetch all UIDs — filter already-known via DB
             all_uids: list[int] = client.search("ALL")
             if not all_uids:
+                logger.info(f"[{account.name}] {folder}: empty")
                 continue
 
-            # Check which UIDs we already have
             existing_uids = {
                 row[0]
                 for row in session.query(Email.imap_uid)
@@ -164,44 +161,43 @@ def fetch_account(
             }
             new_uids = [u for u in all_uids if u not in existing_uids]
 
-            logger.info(
-                f"[{account.name}] {folder}: {len(new_uids)} new of {len(all_uids)} total"
-            )
+            if not new_uids:
+                logger.info(f"[{account.name}] {folder}: nothing new")
+                continue
 
-            for i in range(0, len(new_uids), batch_size):
-                batch = new_uids[i : i + batch_size]
-                try:
-                    messages = client.fetch(batch, ["RFC822"])
-                except Exception as e:
-                    logger.error(f"[{account.name}] Fetch batch failed: {e}")
-                    continue
+            logger.info(f"[{account.name}] {folder}: fetching {len(new_uids)} new mails")
 
-                for uid, data in messages.items():
-                    raw = data.get(b"RFC822")
-                    if not raw:
-                        continue
+            with tqdm(total=len(new_uids), desc=f"{account.name}/{folder}", unit="mail") as pbar:
+                for i in range(0, len(new_uids), batch_size):
+                    batch = new_uids[i : i + batch_size]
                     try:
-                        obj = _build_email_obj(raw, uid, folder, account)
-                        # Idempotency check via message_id + account_id
-                        exists = (
-                            session.query(Email)
-                            .filter_by(
-                                message_id=obj["message_id"],
-                                account_id=account.id,
-                            )
-                            .first()
-                        )
-                        if not exists:
-                            session.add(Email(**obj))
-                            inserted += 1
+                        messages = client.fetch(batch, ["RFC822"])
                     except Exception as e:
-                        logger.warning(f"[{account.name}] UID {uid} parse error: {e}")
+                        logger.error(f"[{account.name}] Fetch batch failed: {e}")
+                        pbar.update(len(batch))
+                        continue
 
-                session.commit()
+                    rows = []
+                    for uid, data in messages.items():
+                        raw = data.get(b"RFC822")
+                        if not raw:
+                            pbar.update(1)
+                            continue
+                        try:
+                            rows.append(_build_email_obj(raw, uid, folder, account))
+                        except Exception as e:
+                            logger.warning(f"[{account.name}] UID {uid} parse error: {e}")
+                        pbar.update(1)
 
-    # Update last_synced_at
+                    if rows:
+                        stmt = pg_insert(Email).values(rows).on_conflict_do_nothing(
+                            constraint="uq_email_message_account"
+                        )
+                        result = session.execute(stmt)
+                        inserted += max(result.rowcount, 0)
+                        session.commit()
+
     account.last_synced_at = datetime.now(timezone.utc)
     session.commit()
-
-    logger.info(f"[{account.name}] Inserted {inserted} new emails")
+    logger.info(f"[{account.name}] Done — {inserted} new emails inserted")
     return inserted
