@@ -4,29 +4,16 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from loguru import logger
 from sqlalchemy.orm import Session
 
-from infermail.db.models import ClassificationMethod, Email, EmailClassification, Label, Rule
-
-if TYPE_CHECKING:
-    pass
+from infermail.db.helpers import get_or_create_label
+from infermail.db.models import ClassificationMethod, Email, EmailClassification, Rule
 
 SPAM_FOLDERS = {"Spamverdacht", "Junk-E-Mail", "[Gmail]/Spam", "Spam", "spam"}
 # Binary model output: 1 = inbox, 0 = not-inbox (spam/newsletter)
 _LABEL_MAP = {1: "inbox", 0: "spam"}
-
-
-def _get_or_create_label(session: Session, name: str) -> Label:
-    label = session.query(Label).filter_by(name=name).first()
-    if not label:
-        colors = {"inbox": "#22c55e", "spam": "#ef4444", "newsletter": "#3b82f6", "wichtig": "#eab308"}
-        label = Label(name=name, is_system=True, color=colors.get(name, "#94a3b8"))
-        session.add(label)
-        session.flush()
-    return label
 
 
 class Predictor:
@@ -77,7 +64,13 @@ class Predictor:
         import pandas as pd
 
         X = pd.DataFrame(self._build_features(emails))
-        proba = self._pipeline.predict_proba(X)[:, 1]  # P(inbox)
+        try:
+            proba = self._pipeline.predict_proba(X)[:, 1]  # P(inbox)
+        except AttributeError:
+            # LinearSVC has no predict_proba — use decision_function + sigmoid
+            import math
+            scores = self._pipeline.decision_function(X)
+            proba = [1.0 / (1.0 + math.exp(-float(s))) for s in scores]
         results = []
         for p in proba:
             label = _LABEL_MAP[int(p >= 0.5)]
@@ -137,7 +130,7 @@ def _apply_rules(session: Session, emails: list[Email]) -> int:
                 break  # highest-priority rule already applied
 
             label_name = rule.action.get("label", "spam")
-            label = _get_or_create_label(session, label_name)
+            label = get_or_create_label(session, label_name)
             session.add(EmailClassification(
                 email_id=email.id,
                 label_id=label.id,
@@ -192,7 +185,7 @@ def run_classify(
     if predictions:
         now = datetime.now(timezone.utc)
         for email, (label_name, confidence) in zip(emails, predictions):
-            label = _get_or_create_label(session, label_name)
+            label = get_or_create_label(session, label_name)
             session.add(EmailClassification(
                 email_id=email.id,
                 label_id=label.id,
