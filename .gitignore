@@ -1,6 +1,20 @@
-.env
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Project
+.env
 models/*.joblib
 backups/
+
+# Claude Code
+CLAUDE.md
+memory/
