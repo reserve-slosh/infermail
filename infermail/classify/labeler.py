@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 import readchar
 from rich.console import Console
@@ -101,7 +101,7 @@ def _apply_label(session: Session, email: Email, label_name: str) -> None:
     )
     if existing:
         existing.label_id = label.id
-        existing.classified_at = datetime.utcnow()
+        existing.classified_at = datetime.now(timezone.utc)
     else:
         session.add(EmailClassification(
             email_id=email.id,
