@@ -18,7 +18,9 @@ services:
       retries: 5
 
   app:
-    build: .
+    build:
+      context: .
+      network: host
     container_name: infermail_app
     restart: unless-stopped
     depends_on:
@@ -26,8 +28,11 @@ services:
         condition: service_healthy
     env_file: .env
     volumes:
-      - ./backups:/app/backups
+      - ./backup:/app/backup
       - ./models:/app/models
+    command: infermail daemon
 
 volumes:
   postgres_data:
+
+
