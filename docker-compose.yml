@@ -26,9 +26,8 @@ services:
         condition: service_healthy
     env_file: .env
     volumes:
-      - ./backup:/app/backup
+      - ./backups:/app/backups
       - ./models:/app/models
-    command: infermail daemon
 
 volumes:
   postgres_data:
