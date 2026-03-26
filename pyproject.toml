@@ -25,11 +25,11 @@ dependencies = [
     "readchar>=4.0",
     "joblib>=1.5.3",
     "scikit-learn>=1.4",
+    "pandas>=2.0",
 ]
 
 [project.optional-dependencies]
 train = [
-    "pandas>=2.0",
     "lightgbm>=4.0",
     "matplotlib>=3.8",
     "seaborn>=0.13",
