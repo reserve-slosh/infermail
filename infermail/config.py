@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     backup_dir: Path = Path("backups")
     model_path: Path = Path("models/classifier.joblib")
 
+    # PostgreSQL dump settings
+    backup_keep_count: int = 7          # number of .dump files to retain
+    backup_interval_seconds: int = 86400  # how often the daemon runs pg_dump (1 day)
+
     # Account credentials
     account_gmail_password: str = ""
     account_strato_password: str = ""

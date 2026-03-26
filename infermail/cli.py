@@ -37,14 +37,25 @@ def fetch(account: str | None, dry_run: bool) -> None:
 def daemon() -> None:
     """Run fetch loop continuously (used by Docker)."""
     import time
+    from datetime import datetime, timezone
 
+    from infermail.backup import run_pg_dump
     from infermail.classify.predictor import Predictor, run_classify
     from infermail.fetch.runner import run_fetch
     from infermail.sync import run_sync
 
     predictor = Predictor(settings.model_path)
-    logger.info(f"Daemon started — interval: {settings.fetch_interval_seconds}s")
+    logger.info(
+        f"Daemon started — fetch interval: {settings.fetch_interval_seconds}s, "
+        f"backup interval: {settings.backup_interval_seconds}s, "
+        f"keep: {settings.backup_keep_count} dumps"
+    )
+
+    last_backup_at: datetime | None = None
+
     while True:
+        now = datetime.now(timezone.utc)
+
         try:
             with SessionLocal() as session:
                 run_fetch(session)
@@ -52,6 +63,15 @@ def daemon() -> None:
                 run_sync(session)
         except Exception as e:
             logger.error(f"Fetch/classify cycle failed: {e}")
+
+        elapsed = (now - last_backup_at).total_seconds() if last_backup_at else float("inf")
+        if elapsed >= settings.backup_interval_seconds:
+            try:
+                run_pg_dump(settings.backup_dir, settings.database_url, settings.backup_keep_count)
+                last_backup_at = now
+            except Exception as e:
+                logger.error(f"pg_dump failed: {e}")
+
         time.sleep(settings.fetch_interval_seconds)
 
 
@@ -107,17 +127,32 @@ def sync(account: str | None, dry_run: bool) -> None:
 
 
 @main.command()
-@click.option("--dir", "backup_dir", default="backups", show_default=True, help="Directory to write the backup file.")
-def backup(backup_dir: str) -> None:
+@click.option("--dir", "backup_dir", default=None, show_default=True, help="Directory to write the backup file (default: settings.backup_dir).")
+def backup(backup_dir: str | None) -> None:
     """Dump all emails and classifications to a JSONL file."""
     from pathlib import Path
 
     from infermail.backup import run_backup
 
-    target = Path(backup_dir)
+    target = settings.backup_dir if backup_dir is None else Path(backup_dir)
     with SessionLocal() as session:
         out = run_backup(session, target)
     click.echo(f"Backup written to {out}")
+
+
+@main.command("backup-db")
+@click.option("--dir", "backup_dir", default=None, help="Directory to write the .dump file (default: settings.backup_dir).")
+@click.option("--keep", default=None, type=int, help="Number of dumps to retain (default: settings.backup_keep_count).")
+def backup_db(backup_dir: str | None, keep: int | None) -> None:
+    """Create a compressed PostgreSQL dump of the full infermail database."""
+    from pathlib import Path
+
+    from infermail.backup import run_pg_dump
+
+    target = settings.backup_dir if backup_dir is None else Path(backup_dir)
+    keep_count = settings.backup_keep_count if keep is None else keep
+    out = run_pg_dump(target, settings.database_url, keep_count)
+    click.echo(f"Database dump written to {out}")
 
 
 @main.command()

@@ -1,10 +1,13 @@
-"""Export all emails and classifications from DB to a JSONL dump."""
+"""Backup utilities: JSONL email export and PostgreSQL binary dump."""
 
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 from loguru import logger
 from sqlalchemy.orm import Session, joinedload
@@ -88,3 +91,75 @@ def run_backup(session: Session, backup_dir: Path) -> Path:
 
     logger.info(f"Backup complete — {written} emails written to {out_path}")
     return out_path
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL binary dump
+# ---------------------------------------------------------------------------
+
+def run_pg_dump(backup_dir: Path, database_url: str, keep_count: int = 7) -> Path:
+    """Create a compressed PostgreSQL binary dump (.dump) of the database.
+
+    Uses ``pg_dump -Fc`` (custom format), which is directly restorable with
+    ``pg_restore``.  Connection parameters are parsed from *database_url*
+    (supports the ``postgresql+psycopg://`` and plain ``postgresql://`` schemes).
+
+    Existing ``.dump`` files in *backup_dir* that match the naming pattern are
+    pruned so that only the most recent *keep_count* files are retained.
+
+    Returns the path of the newly written dump file.
+    """
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    # Strip SQLAlchemy driver suffix so urlparse handles the URL correctly.
+    clean_url = database_url.split("://", 1)
+    clean_url = "postgresql://" + clean_url[1] if len(clean_url) == 2 else database_url
+    parsed = urlparse(clean_url)
+
+    host = parsed.hostname or "localhost"
+    port = str(parsed.port or 5432)
+    user = parsed.username or "postgres"
+    password = parsed.password or ""
+    dbname = (parsed.path or "/postgres").lstrip("/")
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    out_path = backup_dir / f"infermail_{timestamp}.dump"
+
+    env = os.environ.copy()
+    if password:
+        env["PGPASSWORD"] = password
+
+    cmd = [
+        "pg_dump",
+        "-Fc",          # custom compressed format
+        "-h", host,
+        "-p", port,
+        "-U", user,
+        "-d", dbname,
+        "-f", str(out_path),
+    ]
+
+    logger.info(f"pg_dump starting → {out_path}")
+    result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        out_path.unlink(missing_ok=True)
+        raise RuntimeError(f"pg_dump failed (exit {result.returncode}): {result.stderr.strip()}")
+
+    size_mb = out_path.stat().st_size / 1_048_576
+    logger.info(f"pg_dump complete: {out_path} ({size_mb:.1f} MB)")
+
+    _prune_dumps(backup_dir, keep_count)
+    return out_path
+
+
+def _prune_dumps(backup_dir: Path, keep_count: int) -> None:
+    """Delete oldest ``infermail_*.dump`` files, retaining the last *keep_count*."""
+    dumps = sorted(
+        backup_dir.glob("infermail_*.dump"),
+        key=lambda p: p.stat().st_mtime,
+    )
+    to_delete = dumps[:-keep_count] if len(dumps) > keep_count else []
+    for p in to_delete:
+        p.unlink()
+        logger.info(f"Pruned old dump: {p}")
