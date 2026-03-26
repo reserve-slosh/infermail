@@ -123,7 +123,7 @@ def sync(account: str | None, dry_run: bool) -> None:
 
     with SessionLocal() as session:
         counts = run_sync(session, account_name=account, dry_run=dry_run)
-    click.echo(f"moved: {counts['moved']}  skipped: {counts['skipped']}  errors: {counts['errors']}")
+    click.echo(f"moved: {counts['moved']}  skipped: {counts['skipped']}  errors: {counts['errors']}  feedback: {counts['feedback']}")
 
 
 @main.command()
@@ -153,6 +153,39 @@ def backup_db(backup_dir: str | None, keep: int | None) -> None:
     keep_count = settings.backup_keep_count if keep is None else keep
     out = run_pg_dump(target, settings.database_url, keep_count)
     click.echo(f"Database dump written to {out}")
+
+
+@main.command("add-rule")
+@click.option("--domain", default=None, help="Match emails from this sender domain (e.g. gmx.fr).")
+@click.option("--regex", default=None, help="Match sender address/name against this regex.")
+@click.option("--label", default="spam", show_default=True, help="Label to apply when the rule matches.")
+@click.option("--name", default=None, help="Rule name (auto-generated if omitted).")
+def add_rule(domain: str | None, regex: str | None, label: str, name: str | None) -> None:
+    """Insert a new classification rule into the rules table."""
+    from infermail.db.models import Rule
+
+    if not domain and not regex:
+        raise click.UsageError("Provide --domain or --regex.")
+    if domain and regex:
+        raise click.UsageError("--domain and --regex are mutually exclusive.")
+
+    if domain:
+        condition = {"type": "sender_domain", "domain": domain}
+        auto_name = f"domain:{domain}"
+    else:
+        condition = {"type": "sender_regex", "pattern": regex, "field": "both"}
+        auto_name = f"regex:{regex}"
+
+    rule = Rule(
+        name=name or auto_name,
+        condition=condition,
+        action={"label": label},
+    )
+    with SessionLocal() as session:
+        session.add(rule)
+        session.commit()
+        session.refresh(rule)
+    click.echo(f"Rule #{rule.id} created: {rule.name!r} → {label!r}")
 
 
 @main.command()
