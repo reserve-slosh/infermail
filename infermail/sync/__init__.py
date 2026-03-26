@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from imapclient import IMAPClient
 from loguru import logger
 from sqlalchemy.orm import Session, joinedload
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from infermail.db.helpers import get_or_create_label
 from infermail.db.models import Account, ClassificationMethod, Email, EmailClassification
 from infermail.fetch.runner import _get_password, _load_accounts_config
 
@@ -53,6 +55,85 @@ def _move_batch(client: IMAPClient, uids: list[int], target_folder: str) -> None
         client.expunge()
 
 
+def _scan_feedback(
+    client: IMAPClient,
+    session: Session,
+    account: Account,
+    folder_label: dict[str, str],
+    dry_run: bool,
+) -> int:
+    """Detect user-initiated moves and write manual classifications.
+
+    For each managed folder, fetches current UIDs from IMAP and compares them
+    to the DB. Emails whose UID now lives in a different folder than the DB
+    recorded are written as ``method=manual`` classifications — ground truth
+    for retraining.
+
+    Returns the number of classifications written (or that would be written in
+    dry-run mode).
+    """
+    written = 0
+    for folder, label_name in folder_label.items():
+        try:
+            client.select_folder(folder, readonly=True)
+            uids: set[int] = set(client.search(["ALL"]))
+        except Exception as e:
+            logger.warning(f"[{account.name}] Feedback scan: cannot access {folder!r}: {e}")
+            continue
+
+        if not uids:
+            continue
+
+        # Emails whose UID is now in this folder but whose DB record says otherwise
+        mismatched = (
+            session.query(Email)
+            .filter(
+                Email.account_id == account.id,
+                Email.imap_uid.in_(uids),
+                Email.imap_folder != folder,
+            )
+            .all()
+        )
+        if not mismatched:
+            continue
+
+        logger.info(
+            f"[{account.name}] Feedback: {len(mismatched)} email(s) found in {folder!r} "
+            f"(DB says elsewhere) → label={label_name!r}"
+        )
+
+        if dry_run:
+            written += len(mismatched)
+            continue
+
+        label = get_or_create_label(session, label_name)
+        now = datetime.now(timezone.utc)
+        for email in mismatched:
+            existing = (
+                session.query(EmailClassification)
+                .filter_by(email_id=email.id, method=ClassificationMethod.manual)
+                .first()
+            )
+            if existing:
+                existing.label_id = label.id
+                existing.confidence = 1.0
+                existing.classified_at = now
+            else:
+                session.add(EmailClassification(
+                    email_id=email.id,
+                    label_id=label.id,
+                    method=ClassificationMethod.manual,
+                    confidence=1.0,
+                    classified_at=now,
+                ))
+            email.imap_folder = folder
+            written += 1
+
+        session.commit()
+
+    return written
+
+
 def _sync_account(
     session: Session,
     account: Account,
@@ -60,9 +141,11 @@ def _sync_account(
     label_folders: dict[str, str],
     dry_run: bool,
 ) -> dict[str, int]:
-    counts: dict[str, int] = {"moved": 0, "skipped": 0, "errors": 0}
+    counts: dict[str, int] = {"moved": 0, "skipped": 0, "errors": 0, "feedback": 0}
 
     managed_folders = set(label_folders.values())
+    folder_label = {v: k for k, v in label_folders.items()}
+
     emails = (
         session.query(Email)
         .options(
@@ -92,21 +175,8 @@ def _sync_account(
             continue
         moves.append((email, email.imap_folder, target))
 
-    if not moves:
-        logger.info(f"[{account.name}] Nothing to move.")
-        return counts
-
-    logger.info(f"[{account.name}] {len(moves)} emails to move (dry_run={dry_run})")
-
-    if dry_run:
-        summary: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        for _, src, tgt in moves:
-            summary[src][tgt] += 1
-        for src, targets in summary.items():
-            for tgt, n in targets.items():
-                logger.info(f"  {src!r} → {tgt!r}: {n} emails")
-        counts["moved"] += len(moves)
-        return counts
+    if moves:
+        logger.info(f"[{account.name}] {len(moves)} emails to move (dry_run={dry_run})")
 
     try:
         client = _connect(account.imap_host, account.imap_port, account.email_address, password)
@@ -116,54 +186,65 @@ def _sync_account(
         return counts
 
     with client:
-        # Ensure all target folders exist before starting
-        for folder in {tgt for _, _, tgt in moves}:
-            try:
-                _ensure_folder(client, folder)
-            except Exception as e:
-                logger.error(f"[{account.name}] Cannot ensure folder {folder!r}: {e}")
+        if dry_run:
+            summary: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+            for _, src, tgt in moves:
+                summary[src][tgt] += 1
+            for src, targets in summary.items():
+                for tgt, n in targets.items():
+                    logger.info(f"  {src!r} → {tgt!r}: {n} emails")
+            counts["moved"] += len(moves)
+        else:
+            # Ensure all target folders exist before starting
+            for folder in {tgt for _, _, tgt in moves}:
+                try:
+                    _ensure_folder(client, folder)
+                except Exception as e:
+                    logger.error(f"[{account.name}] Cannot ensure folder {folder!r}: {e}")
 
-        # Group: source_folder → target_folder → [(uid, email)]
-        groups: dict[str, dict[str, list[tuple[int, Email]]]] = defaultdict(
-            lambda: defaultdict(list)
-        )
-        for email, src, tgt in moves:
-            groups[src][tgt].append((email.imap_uid, email))  # type: ignore[arg-type]
+            # Group: source_folder → target_folder → [(uid, email)]
+            groups: dict[str, dict[str, list[tuple[int, Email]]]] = defaultdict(
+                lambda: defaultdict(list)
+            )
+            for email, src, tgt in moves:
+                groups[src][tgt].append((email.imap_uid, email))  # type: ignore[arg-type]
 
-        for source_folder, targets in groups.items():
-            try:
-                client.select_folder(source_folder, readonly=False)
-            except Exception as e:
-                n = sum(len(v) for v in targets.values())
-                logger.warning(f"[{account.name}] Cannot select {source_folder!r}: {e} ({n} skipped)")
-                counts["errors"] += n
-                continue
+            for source_folder, targets in groups.items():
+                try:
+                    client.select_folder(source_folder, readonly=False)
+                except Exception as e:
+                    n = sum(len(v) for v in targets.values())
+                    logger.warning(f"[{account.name}] Cannot select {source_folder!r}: {e} ({n} skipped)")
+                    counts["errors"] += n
+                    continue
 
-            for target_folder, uid_email_pairs in targets.items():
-                all_uids = [uid for uid, _ in uid_email_pairs]
-                all_emails = [em for _, em in uid_email_pairs]
+                for target_folder, uid_email_pairs in targets.items():
+                    all_uids = [uid for uid, _ in uid_email_pairs]
+                    all_emails = [em for _, em in uid_email_pairs]
 
-                for i in range(0, len(all_uids), _BATCH):
-                    batch_uids = all_uids[i : i + _BATCH]
-                    batch_emails = all_emails[i : i + _BATCH]
-                    try:
-                        _move_batch(client, batch_uids, target_folder)
-                        for em in batch_emails:
-                            em.imap_folder = target_folder
-                            em.imap_uid = None
-                        session.commit()
-                        counts["moved"] += len(batch_uids)
-                        logger.info(
-                            f"[{account.name}] {source_folder!r} → {target_folder!r}: "
-                            f"moved {len(batch_uids)}"
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"[{account.name}] Move batch failed "
-                            f"({source_folder!r} → {target_folder!r}): {e}"
-                        )
-                        session.rollback()
-                        counts["errors"] += len(batch_uids)
+                    for i in range(0, len(all_uids), _BATCH):
+                        batch_uids = all_uids[i : i + _BATCH]
+                        batch_emails = all_emails[i : i + _BATCH]
+                        try:
+                            _move_batch(client, batch_uids, target_folder)
+                            for em in batch_emails:
+                                em.imap_folder = target_folder
+                                em.imap_uid = None
+                            session.commit()
+                            counts["moved"] += len(batch_uids)
+                            logger.info(
+                                f"[{account.name}] {source_folder!r} → {target_folder!r}: "
+                                f"moved {len(batch_uids)}"
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"[{account.name}] Move batch failed "
+                                f"({source_folder!r} → {target_folder!r}): {e}"
+                            )
+                            session.rollback()
+                            counts["errors"] += len(batch_uids)
+
+        counts["feedback"] = _scan_feedback(client, session, account, folder_label, dry_run)
 
     return counts
 
@@ -179,9 +260,9 @@ def run_sync(
         configs = [c for c in configs if c["name"] == account_name]
         if not configs:
             logger.error(f"No account '{account_name}' found in config/accounts.yml")
-            return {"moved": 0, "skipped": 0, "errors": 0}
+            return {"moved": 0, "skipped": 0, "errors": 0, "feedback": 0}
 
-    totals: dict[str, int] = {"moved": 0, "skipped": 0, "errors": 0}
+    totals: dict[str, int] = {"moved": 0, "skipped": 0, "errors": 0, "feedback": 0}
 
     for cfg in configs:
         label_folders: dict[str, str] = cfg.get("label_folders", {})
@@ -204,7 +285,8 @@ def run_sync(
             totals[k] += v
         logger.info(
             f"[{cfg['name']}] moved={counts['moved']} "
-            f"skipped={counts['skipped']} errors={counts['errors']}"
+            f"skipped={counts['skipped']} errors={counts['errors']} "
+            f"feedback={counts['feedback']}"
         )
 
     return totals
