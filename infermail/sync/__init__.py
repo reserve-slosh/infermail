@@ -62,6 +62,7 @@ def _sync_account(
 ) -> dict[str, int]:
     counts: dict[str, int] = {"moved": 0, "skipped": 0, "errors": 0}
 
+    managed_folders = set(label_folders.values())
     emails = (
         session.query(Email)
         .options(
@@ -70,7 +71,7 @@ def _sync_account(
         .filter(
             Email.account_id == account.id,
             Email.imap_uid.is_not(None),
-            Email.imap_folder.is_not(None),
+            Email.imap_folder.in_(managed_folders),
         )
         .all()
     )
