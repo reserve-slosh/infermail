@@ -30,7 +30,6 @@ services:
     volumes:
       - ./backup:/app/backup
       - ./models:/app/models
-    command: infermail daemon
 
 volumes:
   postgres_data:
