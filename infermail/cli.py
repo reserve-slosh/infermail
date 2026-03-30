@@ -43,6 +43,7 @@ def daemon() -> None:
     from infermail.classify.predictor import Predictor, run_classify
     from infermail.fetch.runner import run_fetch
     from infermail.sync import run_sync
+    from infermail.sync.demotion import run_demotion
 
     predictor = Predictor(settings.model_path)
     logger.info(
@@ -60,6 +61,7 @@ def daemon() -> None:
             with SessionLocal() as session:
                 run_fetch(session)
                 run_classify(session, predictor)
+                run_demotion(session)
                 run_sync(session)
         except Exception as e:
             logger.error(f"Fetch/classify cycle failed: {e}")
