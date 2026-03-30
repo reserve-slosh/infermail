@@ -11,6 +11,9 @@ accounts:
       - Arbeit
       - Privat
       - Belege
+    inbox_folders:
+      - INBOX
+    demoted_folder: infermail/Demoted
     label_folders:
       inbox: INBOX
       wichtig: INBOX
@@ -26,6 +29,9 @@ accounts:
     folders:
       - INBOX
       - Spam
+    inbox_folders:
+      - INBOX
+    demoted_folder: infermail/Demoted
     label_folders:
       inbox: INBOX
       wichtig: INBOX
@@ -44,6 +50,9 @@ accounts:
       - Junk-E-Mail
       - Archiv
       - Gesendet
+    inbox_folders:
+      - INBOX
+    demoted_folder: infermail/Demoted
     label_folders:
       inbox: INBOX
       wichtig: INBOX
