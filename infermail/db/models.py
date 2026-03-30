@@ -84,6 +84,8 @@ class Email(Base):
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
     imap_uid: Mapped[int | None] = mapped_column(BigInteger)  # UID in source mailbox
     imap_folder: Mapped[str | None] = mapped_column(String(255))
+    source_folder: Mapped[str | None] = mapped_column(String(255))
+    demoted_to_spam_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     subject: Mapped[str | None] = mapped_column(Text)
     sender: Mapped[str | None] = mapped_column(String(512))
