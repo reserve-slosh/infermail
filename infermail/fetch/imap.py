@@ -100,6 +100,7 @@ def _build_email_obj(
         "account_id": account.id,
         "imap_uid": uid,
         "imap_folder": folder,
+        "source_folder": folder,
         "subject": subject,
         "sender": sender_addr or sender_raw,
         "sender_name": _decode_str(sender_name),
