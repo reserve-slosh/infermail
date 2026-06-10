@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import email as email_lib
 from datetime import datetime, timezone
+from email.errors import HeaderParseError
 from email.header import decode_header as _decode_header
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Any
@@ -22,9 +23,13 @@ def _decode_str(value: str | bytes | None) -> str:
     if value is None:
         return ""
     if isinstance(value, bytes):
-        parts = _decode_header(value.decode("utf-8", errors="replace"))
-    else:
+        value = value.decode("utf-8", errors="replace")
+    elif not isinstance(value, str):
+        value = str(value)
+    try:
         parts = _decode_header(value)
+    except HeaderParseError:
+        return value
     result = []
     for part, charset in parts:
         if isinstance(part, bytes):
@@ -83,14 +88,14 @@ def _build_email_obj(
     account: Account,
 ) -> dict[str, Any]:
     msg = email_lib.message_from_bytes(raw)
-    message_id = str(msg.get("Message-ID", "").strip())
+    message_id = str(msg.get("Message-ID", "")).strip()
     subject = _decode_str(msg.get("Subject"))
     sender_raw = str(msg.get("From", ""))
     sender_name, sender_addr = parseaddr(sender_raw)
     reply_to = msg.get("Reply-To")
     recipients_raw = str(msg.get("To", ""))
     list_unsubscribe = msg.get("List-Unsubscribe")
-    headers: dict[str, str] = {k: str(v) for k, v in msg.items()}
+    headers: dict[str, str] = {str(k): str(v) for k, v in msg.items()}
     body_text, body_html = _parse_body(msg)
     has_attachments = any(
         part.get_content_disposition() == "attachment" for part in msg.walk()
