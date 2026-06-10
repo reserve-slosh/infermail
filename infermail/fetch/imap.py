@@ -83,12 +83,12 @@ def _build_email_obj(
     account: Account,
 ) -> dict[str, Any]:
     msg = email_lib.message_from_bytes(raw)
-    message_id = msg.get("Message-ID", "").strip()
+    message_id = str(msg.get("Message-ID", "").strip())
     subject = _decode_str(msg.get("Subject"))
-    sender_raw = msg.get("From", "")
+    sender_raw = str(msg.get("From", ""))
     sender_name, sender_addr = parseaddr(sender_raw)
     reply_to = msg.get("Reply-To")
-    recipients_raw = msg.get("To", "")
+    recipients_raw = str(msg.get("To", ""))
     list_unsubscribe = msg.get("List-Unsubscribe")
     headers: dict[str, str] = {k: str(v) for k, v in msg.items()}
     body_text, body_html = _parse_body(msg)
