@@ -105,12 +105,12 @@ def _build_email_obj(
         "sender": sender_addr or sender_raw,
         "sender_name": _decode_str(sender_name),
         "recipients": [r.strip() for r in recipients_raw.split(",") if r.strip()],
-        "reply_to": reply_to,
+        "reply_to": _decode_str(reply_to) or None,
         "body_text": body_text,
         "body_html": body_html,
         "raw_headers": headers,
         "has_attachments": has_attachments,
-        "list_unsubscribe": list_unsubscribe,
+        "list_unsubscribe": _decode_str(list_unsubscribe) or None,
         "received_at": _parse_received_at(msg),
     }
 
