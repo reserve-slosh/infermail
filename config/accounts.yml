@@ -49,7 +49,6 @@ accounts:
       - Spamverdacht
       - Junk-E-Mail
       - Archiv
-      - Gesendet
     inbox_folders:
       - INBOX
     demoted_folder: infermail/Demoted

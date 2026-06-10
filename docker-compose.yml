@@ -30,6 +30,7 @@ services:
     volumes:
       - ./backup:/app/backup
       - ./models:/app/models
+      - ./config:/app/config
 
 volumes:
   postgres_data:
