@@ -63,8 +63,8 @@ def daemon() -> None:
                 run_classify(session, predictor)
                 run_demotion(session)
                 run_sync(session)
-        except Exception as e:
-            logger.error(f"Fetch/classify cycle failed: {e}")
+        except Exception:
+            logger.exception("Fetch/classify cycle failed")
 
         elapsed = (now - last_backup_at).total_seconds() if last_backup_at else float("inf")
         if elapsed >= settings.backup_interval_seconds:
